@@ -1,172 +1,206 @@
-# Champions League Predictor
+# Champions League Predictor (Monte Carlo)
 
-**Lead Data Engineer & ML Architect**: Lead by Salah
-
-An end-to-end Machine Learning pipeline for predicting UEFA Champions League match outcomes and simulating tournament winners using historical data (2015-2024).
-
-## Project Overview
-
-This project builds a comprehensive ML system to:
-- Extract historical Champions League match data from FBRef (2015-2024)
-- Engineer features including Elo ratings, rolling averages, and Expected Goals (xG)
-- Train predictive models (Logistic Regression, XGBoost) to forecast match outcomes
-- Simulate the knockout stage 10,000 times to predict tournament winners
-
-## Architecture
-
-```
-champions_league_predictor/
-├── data/
-│   ├── raw/           # Raw scraped/API JSON data
-│   ├── processed/     # Cleaned DataFrames ready for modeling
-├── src/
-│   ├── __init__.py
-│   ├── extraction/    # Web scraping (FBRef) & API scripts
-│   ├── database/      # MongoDB connection and insertion logic
-│   ├── features/      # Data cleaning and feature engineering
-│   ├── models/        # XGBoost/Logistic Regression training
-│   ├── simulation/    # Monte Carlo bracket simulation
-├── tests/             # PyTest suite
-├── requirements.txt   # Dependencies
-├── main.py            # Orchestration script
-└── README.md
-```
-
-## Installation
-
-### Prerequisites
-- Python 3.10+
-- MongoDB (local instance running on port 27017)
-
-### Setup
-
-1. **Clone/Navigate to the workspace:**
-   ```bash
-   cd champions_league_predictor
-   ```
-
-2. **Create and activate virtual environment:**
-   ```bash
-   python -m venv env
-   env\Scripts\activate  # Windows
-   ```
-
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Ensure MongoDB is running:**
-   ```bash
-   # On Windows with MongoDB installed:
-   mongod
-   ```
-
-## Usage
-
-### Initialize Pipeline
-
-```bash
-python main.py --mode full
-```
-
-### Database Connection
-
-Verify MongoDB connection:
-```bash
-cd champions_league_predictor
-python -m pytest tests/test_mongo_client.py -v
-```
-
-## Task Breakdown
-
-### Task 1: Project Initialization & DB Setup ✓
-- [x] Created workspace structure with SOLID principles
-- [x] Implemented `src/database/mongo_client.py`
-- [x] MongoDB connection handling with error management
-- [x] PyTest suite with 13 passing tests
-- [x] Collection creation support
-
-### Task 2: Data Extraction Pipeline
-- [ ] Implement `src/extraction/scraper.py`
-- [ ] Web scraping from FBRef (2015-2024)
-- [ ] Random delays to prevent IP bans
-- [ ] Insert raw data into MongoDB
-
-### Task 3: Data Cleaning & Feature Engineering
-- [ ] Implement `src/features/engineer.py`
-- [ ] Data cleaning and missing value handling
-- [ ] Rolling 5-match averages (Goals, xG)
-- [ ] Elo rating system implementation
-- [ ] Prevent data leakage with .shift()
-
-### Task 4: Model Training & Evaluation
-- [ ] Implement `src/models/train.py`
-- [ ] Time-series split (2015-2023 train, 2024 test)
-- [ ] Logistic Regression baseline
-- [ ] XGBoost model training
-- [ ] Brier Score and Log Loss evaluation
-
-### Task 5: Tournament Simulation
-- [ ] Implement `src/simulation/bracket.py`
-- [ ] Monte Carlo 10,000 simulations
-- [ ] Knockout stage prediction
-- [ ] Tournament winner probabilities
-
-## Dependencies
-
-- `pandas` (2.0.3) - Data manipulation
-- `requests` (2.31.0) - HTTP requests
-- `beautifulsoup4` (4.12.2) - Web scraping
-- `pymongo` (4.4.1) - MongoDB driver
-- `scikit-learn` (1.3.0) - ML models and metrics
-- `xgboost` (2.0.0) - XGBoost gradient boosting
-- `pytest` (7.4.0) - Testing framework
-- `joblib` (1.3.1) - Model serialization
-- `numpy` (1.24.3) - Numerical computing
-- `lxml` (4.9.3) - XML parsing
-
-## Testing
-
-Run all tests:
-```bash
-pytest tests/ -v
-```
-
-Run specific module tests:
-```bash
-pytest tests/test_mongo_client.py -v
-```
-
-## MongoDB Setup
-
-### Local MongoDB Connection String
-```
-mongodb://localhost:27017/
-```
-
-### Collections Created
-1. `matches` - Historical match data
-2. `teams` - Team information and ratings
-3. `predictions` - Model predictions
-
-## Contributing
-
-- Follow SOLID principles
-- Write PyTest for every module
-- Use type hints in function signatures
-- Document with docstrings
-
-## Timeline
-
-| Task | Status | Target |
-|------|--------|--------|
-| Project Initialization & DB Setup | ✓ Complete | Done |
-| Data Extraction Pipeline | ⏳ In Progress | Next |
-| Data Cleaning & Feature Engineering | ⏳ Pending | TBD |
-| Model Training & Evaluation | ⏳ Pending | TBD |
-| Tournament Simulation | ⏳ Pending | TBD |
+End-to-end ML pipeline to **predict UEFA Champions League match outcomes** and to estimate **tournament winner probabilities** via **Monte Carlo simulation**.
 
 ---
 
-**Report**: See task reports in conversation for detailed completion status and metrics.
+## What this project does
+
+1. **Collect historical match data** for Champions League seasons.
+2. **Clean and engineer predictive features** using time-ordered team form signals.
+3. **Train classification models** to predict match result classes:
+   - Draw
+   - Home win
+   - Away win
+4. **Simulate the knockout bracket** many times using the trained model’s `predict_proba()` outputs.
+5. **Visualize** results and display them in a **Streamlit dashboard**.
+
+---
+
+## Data collection
+
+### Sources
+This repository supports multiple collection paths:
+
+- **API extraction** (stored for future/production use):
+  - `run_extraction.py` orchestrates extraction using `src/extraction/api_extractor.py`.
+  - Requires `RAPIDAPI_KEY` in `.env`.
+
+- **FBRef web scraping** (historical match ingestion):
+  - `src/extraction/scraper.py` implements `FBRefScraper`.
+  - Includes randomized delays to reduce the chance of IP blocking.
+
+- **Mock data fallback** (for environments without Mongo/API credentials):
+  - `generate_mock_data.py` produces `data/champions_league_matches.json`.
+  - `save_mock_data.py` can also seed MongoDB.
+
+### Storage
+- Raw match records can be stored in **MongoDB** (`matches` collection) or saved locally as JSON/CSV artifacts under `data/`.
+
+---
+
+## Data cleaning & feature engineering
+
+Feature engineering lives in:
+- `src/features/engineer.py`
+
+The pipeline produces a training-ready dataset stored as:
+- `data/processed_features.csv`
+
+### Key steps
+
+1. **Chronological ordering**
+   - Matches are sorted by the `date` column.
+   - This is critical for time-series learning and leakage prevention.
+
+2. **Elo ratings (pre-match, anti-leakage)**
+   - The code computes **team Elo ratings before** each match.
+   - It records `Home_Elo_Pre` and `Away_Elo_Pre` and only updates Elo **after** recording.
+   - This ensures the model never “sees the future” result when estimating pre-match strength.
+
+3. **Rolling momentum (anti-leakage)**
+   - Uses rolling 5-match averages for goals scored/conceded.
+   - Anti-leakage is enforced with `.shift(1)` so the momentum at match *N* only reflects matches *N-1 … N-5*.
+   - Produces:
+     - `Home_Rolling_Goals_Scored`
+     - `Home_Rolling_Goals_Conceded`
+     - `Away_Rolling_Goals_Scored`
+     - `Away_Rolling_Goals_Conceded`
+
+4. **Target creation**
+   - Classifies match outcomes into a 3-class label `Target`:
+     - Home win → `1`
+     - Draw → `0`
+     - Away win → `2`
+
+5. **Cleaning and selection**
+   - Rows with insufficient rolling history are dropped.
+   - The final feature set is exported (CSV and/or MongoDB fallback).
+
+---
+
+## Model training
+
+Model training lives in:
+- `src/models/train.py`
+
+It trains and evaluates:
+- **Logistic Regression** baseline
+- **XGBoost** model with hyperparameter tuning
+
+### How training is done
+
+1. **Time-series split by season**
+   - Training seasons: earlier seasons (e.g., 2015–2022/2023)
+   - Test season: latest season (e.g., 2023–2024)
+
+2. **Scaling (train-only fit)**
+   - `StandardScaler` is fitted only on the training set.
+   - The fitted scaler is applied to test data.
+
+3. **XGBoost tuning**
+   - Uses `GridSearchCV` with `TimeSeriesSplit`.
+   - Scoring uses multi-class log loss.
+
+4. **Evaluation metrics**
+   - Multi-class **Log Loss**
+   - Multi-class **Brier Score** (via one-hot encoding)
+
+### Saved model artifacts
+After training, the project writes:
+- `models/best_model_xgboost.joblib`
+- `models/scaler.joblib`
+- `models/feature_columns.json`
+- `models/metadata.json`
+
+---
+
+## Tournament simulation (Monte Carlo)
+
+Simulation lives in:
+- `src/simulation/bracket.py`
+
+### Core idea
+- The model predicts probabilities for the match outcome classes using `predict_proba()`.
+- Each simulated match samples an outcome from those probabilities.
+- The bracket advances (Round of 16 → Quarterfinal → Semifinal → Final → Champion).
+- Team strength signals (Elo-like rating and rolling goal signals) are updated dynamically within each simulation iteration.
+
+### Outputs
+The simulator writes:
+- `results/tournament_simulation_results.json`
+
+The JSON includes per-team probabilities for stages (when available), including:
+- `probabilities['champions']`
+- `probabilities['finalists']`
+- `probabilities['semifinalists']`
+- `probabilities['quarterfinalists']`
+
+---
+
+## Visualization & dashboard
+
+### Static visual reports
+- `src/visualization/reports.py` generates PNG plots into:
+  - `results/plots/`
+
+Plots include:
+- Championship probability bar chart
+- Progression heatmap
+- Drop-off analysis
+- Top contenders comparison
+
+### Streamlit app
+- `app.py` loads:
+  - `results/tournament_simulation_results.json`
+  - `results/plots/*.png`
+
+The dashboard:
+- Lets you run the simulation again via a slider-controlled number of iterations.
+- Displays probabilities and plots.
+
+---
+
+## How to run (typical workflow)
+
+### 1) Prepare data
+- If using mock data:
+  - `python generate_mock_data.py`
+
+### 2) Engineer features
+- `src/features/engineer.py` produces `data/processed_features.csv`
+
+### 3) Train models
+- `src/models/train.py` creates `models/*.joblib`
+
+### 4) Run a simulation
+- `src/simulation/bracket.py` writes `results/tournament_simulation_results.json`
+
+### 5) Start the dashboard
+- `streamlit run app.py`
+
+---
+
+## Project structure
+
+```text
+champions_league_predictor/
+├── data/
+├── models/
+├── results/
+├── src/
+│   ├── extraction/      # API + FBRef scraping
+│   ├── features/       # Cleaning + feature engineering (Elo, rolling)
+│   ├── models/         # Training (LogReg + XGBoost)
+│   ├── simulation/     # Monte Carlo bracket simulation
+│   └── visualization/  # Static plots
+├── app.py               # Streamlit dashboard
+└── run_extraction.py   # Orchestrates API extraction (optional)
+```
+
+---
+
+## Notes
+- Feature engineering is built to prevent data leakage (pre-match Elo + rolling averages shifted by 1).
+- Simulation stage probabilities are derived from counters collected across Monte Carlo iterations and normalized by `num_simulations`.
+
