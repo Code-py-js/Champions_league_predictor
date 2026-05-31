@@ -1,0 +1,29 @@
+{
+  "best_model": "XGBoost",
+  "lr_log_loss": 1.1546618723396527,
+  "xgb_log_loss": 1.1308777344596554,
+  "lr_brier": 0.22925991291729608,
+  "xgb_brier": 0.22749771549185374,
+  "train_seasons": [
+    "2015-2016",
+    "2016-2017",
+    "2017-2018",
+    "2018-2019",
+    "2019-2020",
+    "2020-2021",
+    "2021-2022",
+    "2022-2023"
+  ],
+  "test_season": "2023-2024",
+  "train_samples": 413,
+  "test_samples": 56,
+  "created_at": "2026-05-31T15:19:04.479667",
+  "features": [
+    "Home_Elo_Pre",
+    "Away_Elo_Pre",
+    "Home_Rolling_Goals_Scored",
+    "Home_Rolling_Goals_Conceded",
+    "Away_Rolling_Goals_Scored",
+    "Away_Rolling_Goals_Conceded"
+  ]
+}
