@@ -1,0 +1,12 @@
+[server]
+headless = true
+runOnSave = false
+fileWatcherType = "none"
+maxUploadSize = 200
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = false

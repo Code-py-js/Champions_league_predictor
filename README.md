@@ -181,6 +181,33 @@ The dashboard:
 
 ---
 
+## Deploy (Free) - Streamlit Community Cloud
+
+### Exact deployment steps
+
+1. Push your latest code to GitHub.
+2. Go to https://share.streamlit.io and sign in with GitHub.
+3. Click **New app**.
+4. Select your repository and set:
+   - Branch: `main`
+   - Main file path: `app.py`
+5. Click **Deploy**.
+
+### Repo-specific deployment notes
+
+- Main app entrypoint: `app.py`
+- Production config file: `.streamlit/config.toml`
+- Full step-by-step checklist: `DEPLOY_STREAMLIT_CHECKLIST.md`
+
+### Quick post-deploy checks
+
+1. Dashboard loads without import errors.
+2. KPI cards and chart tabs render.
+3. Data table is visible and downloadable.
+4. **Run New Simulation** completes and refreshes results.
+
+---
+
 ## Project structure
 
 ```text
