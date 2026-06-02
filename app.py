@@ -16,6 +16,8 @@ from pathlib import Path
 import sys
 from datetime import datetime
 import warnings
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Suppress deprecation warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -354,16 +356,19 @@ def load_json_results():
         st.error(f"❌ Error loading JSON results: {str(e)}")
         return None
 
-def load_image(image_path):
-    """Load image file with error handling."""
+@st.cache_data(show_spinner=False)
+def load_features_data():
+    """Load processed_features.csv for dynamic team Elo extraction."""
+    csv_path = PROJECT_ROOT / "data" / "processed_features.csv"
     try:
-        if not os.path.exists(image_path):
-            st.warning(f"⚠️ Image not found: {image_path}")
+        if not csv_path.exists():
             return None
-        return image_path
-    except Exception as e:
-        st.error(f"❌ Error loading image: {str(e)}")
+        df = pd.read_csv(csv_path)
+        df['date'] = pd.to_datetime(df['date'])
+        return df
+    except Exception:
         return None
+
 
 @st.cache_data(show_spinner=False)
 def create_data_table(results_data):
@@ -494,31 +499,25 @@ def get_top_contender(results_data):
     return max_team, max_prob
 
 
-def get_highest_elo(results_data):
-    """Get team with highest Elo rating (from team registry)."""
-    # Note: This could be enhanced by reading from processed_features.csv
-    # For now, return a static value based on last known state
-    elo_map = {
-        "Real Madrid": 1598.3,
-        "Liverpool": 1584.3,
-        "Inter Milan": 1578.3,
-        "Porto": 1547.5,
-        "Borussia Dortmund": 1530.2,
-        "Ajax": 1523.2,
-        "Napoli": 1514.8,
-        "Juventus": 1513.1,
-        "Chelsea": 1511.2,
-        "Paris Saint-Germain": 1500.7,
-        "Barcelona": 1498.0,
-        "AC Milan": 1480.0,
-        "Atlético Madrid": 1454.9,
-        "Bayern Munich": 1425.1,
-        "Manchester United": 1397.3,
-        "Manchester City": 1369.6
-    }
-    
-    max_team = max(elo_map, key=elo_map.get)
-    return max_team, elo_map[max_team]
+def get_highest_elo():
+    """Get team with highest Elo rating, derived dynamically from processed_features.csv."""
+    df = load_features_data()
+    if df is None or df.empty:
+        return None, None
+    try:
+        home_elos = df[['date', 'home_team', 'Home_Elo_Pre']].rename(
+            columns={'home_team': 'team', 'Home_Elo_Pre': 'elo'}
+        )
+        away_elos = df[['date', 'away_team', 'Away_Elo_Pre']].rename(
+            columns={'away_team': 'team', 'Away_Elo_Pre': 'elo'}
+        )
+        all_elos = pd.concat([home_elos, away_elos], ignore_index=True)
+        latest_elos = all_elos.sort_values('date').groupby('team')['elo'].last()
+        max_team = str(latest_elos.idxmax())
+        max_elo = float(latest_elos.max())
+        return max_team, max_elo
+    except Exception:
+        return None, None
 
 def calculate_hhi(results_data):
     """Calculate Herfindahl-Hirschman Index (concentration measure)."""
@@ -537,6 +536,198 @@ def calculate_hhi(results_data):
 
     hhi = sum(p ** 2 for p in probs)
     return hhi
+
+
+# ============================================================================
+# DYNAMIC CHART BUILDERS (Plotly — reads live from simulation JSON)
+# ============================================================================
+
+_DARK_LAYOUT = dict(
+    plot_bgcolor='#0f131a',
+    paper_bgcolor='#0f131a',
+    font=dict(color='#cbd5e1', family='Manrope, sans-serif'),
+)
+
+
+def build_championship_chart(results_data):
+    """Horizontal bar chart: all teams ranked by P(Champion)."""
+    champions = results_data.get('probabilities', {}).get('champions', {})
+    if not champions:
+        return None
+    df = pd.DataFrame({'Team': list(champions.keys()), 'prob': list(champions.values())})
+    df = df.sort_values('prob', ascending=True)
+    threshold = df['prob'].quantile(0.75)
+    colors = ['#d4a76a' if p >= threshold else '#4a90e2' for p in df['prob']]
+    max_prob = float(df['prob'].max())
+    fig = go.Figure(go.Bar(
+        x=df['prob'] * 100,
+        y=df['Team'],
+        orientation='h',
+        marker_color=colors,
+        text=[f"{p*100:.2f}%" for p in df['prob']],
+        textposition='outside',
+        textfont=dict(size=10, color='#cbd5e1'),
+        cliponaxis=False,
+    ))
+    fig.update_layout(
+        **_DARK_LAYOUT,
+        title=dict(text='Championship Probability — All Teams', font=dict(size=14, color='#f8f9fa')),
+        xaxis=dict(
+            title='P(Champion) %',
+            gridcolor='#2d3a4a',
+            linecolor='#2d3a4a',
+            range=[0, max_prob * 130],
+        ),
+        yaxis=dict(linecolor='#2d3a4a'),
+        height=520,
+        margin=dict(l=170, r=90, t=55, b=65),
+    )
+    fig.add_annotation(
+        text="\u25a0 Top quartile (gold) \u2003 \u25a0 Rest (blue)",
+        xref='paper', yref='paper', x=0, y=-0.10,
+        showarrow=False, font=dict(size=11, color='#94a3b8'),
+        align='left',
+    )
+    return fig
+
+
+def build_progression_heatmap(results_data):
+    """Heatmap: teams × stages — advancement probabilities."""
+    probs = results_data.get('probabilities', {})
+    stage_map = [
+        ('Semifinal', 'semifinalists'),
+        ('Final', 'finalists'),
+        ('Champion', 'champions'),
+    ]
+    champions = probs.get('champions', {})
+    if not champions:
+        return None
+    teams = sorted(champions.keys(), key=lambda t: champions.get(t, 0), reverse=True)
+    z = []
+    stage_labels = []
+    for stage_label, key in stage_map:
+        sp = probs.get(key, {})
+        z.append([round(sp.get(t, 0) * 100, 2) for t in teams])
+        stage_labels.append(stage_label)
+    fig = go.Figure(go.Heatmap(
+        z=z,
+        x=teams,
+        y=stage_labels,
+        colorscale=[[0, '#161d26'], [0.5, '#b37b3e'], [1, '#d4a76a']],
+        text=[[f"{v:.1f}%" for v in row] for row in z],
+        texttemplate='%{text}',
+        textfont=dict(size=9, color='#f8f9fa'),
+        colorbar=dict(
+            title=dict(text='%', font=dict(color='#94a3b8')),
+            tickfont=dict(color='#94a3b8'),
+            bgcolor='#0f131a',
+            bordercolor='#2d3a4a',
+        ),
+        hoverongaps=False,
+    ))
+    fig.update_layout(
+        **_DARK_LAYOUT,
+        title=dict(text='Stage Advancement Probabilities per Team', font=dict(size=14, color='#f8f9fa')),
+        xaxis=dict(tickangle=-45, linecolor='#2d3a4a', tickfont=dict(size=10)),
+        yaxis=dict(linecolor='#2d3a4a', tickfont=dict(size=11)),
+        height=340,
+        margin=dict(l=90, r=20, t=55, b=160),
+    )
+    return fig
+
+
+def build_dropoff_chart(results_data):
+    """Two-panel: stage funnel bar + probability box plots per stage."""
+    probs = results_data.get('probabilities', {})
+    qf = list(probs.get('quarterfinalists', {}).values())
+    sf = list(probs.get('semifinalists', {}).values())
+    fi = list(probs.get('finalists', {}).values())
+    ch = list(probs.get('champions', {}).values())
+    if not ch:
+        return None
+    n = len(ch)
+    stages = ['Rd. of 16', 'Quarterfinal', 'Semifinal', 'Final', 'Champion']
+    counts = [n, sum(qf), sum(sf), sum(fi), sum(ch)]
+    palette = ['#4a90e2', '#48a869', '#d4a76a', '#e85d5d', '#e8c896']
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=['Expected Teams per Round', 'Probability Spread by Stage'],
+        horizontal_spacing=0.12,
+    )
+    fig.add_trace(go.Bar(
+        x=stages,
+        y=counts,
+        marker_color=palette,
+        text=[f"{c:.1f}" for c in counts],
+        textposition='outside',
+        textfont=dict(color='#cbd5e1', size=11),
+        showlegend=False,
+        cliponaxis=False,
+    ), row=1, col=1)
+    for stage_label, data, color in [
+        ('QF', qf, '#48a869'),
+        ('SF', sf, '#d4a76a'),
+        ('Final', fi, '#4a90e2'),
+        ('Champion', ch, '#e85d5d'),
+    ]:
+        fig.add_trace(go.Box(
+            y=[p * 100 for p in data],
+            name=stage_label,
+            marker_color=color,
+            line_color=color,
+            boxmean='sd',
+            showlegend=True,
+        ), row=1, col=2)
+    fig.update_layout(
+        **_DARK_LAYOUT,
+        height=440,
+        margin=dict(l=55, r=30, t=70, b=60),
+        yaxis=dict(title='Expected teams', gridcolor='#2d3a4a', linecolor='#2d3a4a'),
+        yaxis2=dict(title='Probability %', gridcolor='#2d3a4a', linecolor='#2d3a4a'),
+        xaxis=dict(linecolor='#2d3a4a'),
+        xaxis2=dict(linecolor='#2d3a4a'),
+        legend=dict(bgcolor='#161d26', bordercolor='#2d3a4a', x=1.01, y=1),
+    )
+    fig.update_annotations(font=dict(color='#94a3b8', size=12))
+    return fig
+
+
+def build_top_contenders_chart(results_data):
+    """Grouped bar chart: top 8 teams × Semifinal / Final / Champion probabilities."""
+    probs = results_data.get('probabilities', {})
+    champions = probs.get('champions', {})
+    if not champions:
+        return None
+    top_8 = [t for t, _ in sorted(champions.items(), key=lambda x: x[1], reverse=True)[:8]]
+    stage_def = [
+        ('Semifinal', 'semifinalists', '#4a90e2'),
+        ('Final', 'finalists', '#d4a76a'),
+        ('Champion', 'champions', '#e85d5d'),
+    ]
+    fig = go.Figure()
+    for label, key, color in stage_def:
+        stage_probs = probs.get(key, {})
+        fig.add_trace(go.Bar(
+            name=label,
+            x=top_8,
+            y=[stage_probs.get(t, 0) * 100 for t in top_8],
+            marker_color=color,
+            text=[f"{stage_probs.get(t, 0)*100:.1f}%" for t in top_8],
+            textposition='outside',
+            textfont=dict(size=9, color='#cbd5e1'),
+            cliponaxis=False,
+        ))
+    fig.update_layout(
+        **_DARK_LAYOUT,
+        barmode='group',
+        title=dict(text='Top 8 Contenders — Stage Probabilities', font=dict(size=14, color='#f8f9fa')),
+        yaxis=dict(title='Probability %', gridcolor='#2d3a4a', linecolor='#2d3a4a'),
+        xaxis=dict(tickangle=-25, linecolor='#2d3a4a'),
+        height=440,
+        margin=dict(l=55, r=30, t=55, b=100),
+        legend=dict(bgcolor='#161d26', bordercolor='#2d3a4a'),
+    )
+    return fig
 
 
 def render_kpi_card(title, main_value, sub_value):
@@ -594,7 +785,7 @@ if results_data:
         )
     
     # KPI 2: Highest Elo
-    highest_elo_team, highest_elo = get_highest_elo(results_data)
+    highest_elo_team, highest_elo = get_highest_elo()
     with col2:
         render_kpi_card(
             "Highest Elo",
@@ -665,22 +856,9 @@ if run_button:
             st.success(f"✅ Simulation completed successfully with {num_iterations:,} iterations!")
             st.balloons()
 
-            # Regenerate static PNG plots so the four visualization tabs reflect the new simulation.
-            try:
-                import subprocess as _subprocess
-                _subprocess.run(
-                    [sys.executable, str(PROJECT_ROOT / "src" / "visualization" / "reports.py")],
-                    cwd=str(PROJECT_ROOT),
-                    capture_output=True,
-                    text=True,
-                    timeout=600
-                )
-            except Exception:
-                # Plots are non-critical; JSON + table should still work.
-                pass
-
-            # Reload data and refresh the page
-            results_data = load_json_results()
+            # Clear data caches so the next render reads fresh simulation results.
+            load_json_results.clear()
+            load_features_data.clear()
             st.rerun()
         else:
             st.error("❌ Simulation failed. Please check the logs.")
@@ -690,12 +868,11 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.divider()
 
 # ============================================================================
-# STATIC VISUALIZATIONS GALLERY
+# INTERACTIVE VISUALIZATIONS (live Plotly charts from simulation JSON)
 # ============================================================================
 
 st.markdown('<div class="section-label">Visual Diagnostics</div>', unsafe_allow_html=True)
 
-# Create tabs for different visualizations
 tab1, tab2, tab3, tab4 = st.tabs([
     "Championship odds",
     "Stage progression",
@@ -703,41 +880,43 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "Leading contenders"
 ])
 
-with tab1:
-    st.markdown("#### Championship Probability Distribution")
-    st.markdown("Horizontal bar chart showing all 16 teams ranked by their probability of winning the tournament. Top quartile highlighted in red.")
-    image_path = load_image(str(PLOTS_DIR / "championship_probabilities.png"))
-    if image_path:
-        st.image(image_path, width="stretch")
-    else:
-        st.warning("⚠️ Plot not available")
+if results_data:
+    with tab1:
+        fig = build_championship_chart(results_data)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("⚠️ No championship data available — run a simulation first.")
 
-with tab2:
-    st.markdown("#### Tournament Stage Progression Heatmap")
-    st.markdown("16×3 heatmap showing team advancement probabilities across Semifinal → Final → Champion stages. Red indicates high probability, green indicates low.")
-    image_path = load_image(str(PLOTS_DIR / "progression_heatmap.png"))
-    if image_path:
-        st.image(image_path, width="stretch")
-    else:
-        st.warning("⚠️ Plot not available")
+    with tab2:
+        fig = build_progression_heatmap(results_data)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("⚠️ No progression data available — run a simulation first.")
 
-with tab3:
-    st.markdown("#### Drop-off Analysis: Elimination Rates")
-    st.markdown("Left: Expected team count per tournament round. Right: Probability distribution box plots showing advancement variance across teams.")
-    image_path = load_image(str(PLOTS_DIR / "dropoff_analysis.png"))
-    if image_path:
-        st.image(image_path, width="stretch")
-    else:
-        st.warning("⚠️ Plot not available")
+    with tab3:
+        fig = build_dropoff_chart(results_data)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("⚠️ No drop-off data available — run a simulation first.")
 
-with tab4:
-    st.markdown("#### Top 8 Contenders Progression")
-    st.markdown("Grouped bar chart comparing top 8 teams across three tournament stages (Semifinal, Final, Champion).")
-    image_path = load_image(str(PLOTS_DIR / "top_contenders.png"))
-    if image_path:
-        st.image(image_path, width="stretch")
-    else:
-        st.warning("⚠️ Plot not available")
+    with tab4:
+        fig = build_top_contenders_chart(results_data)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("⚠️ No top contenders data available — run a simulation first.")
+else:
+    with tab1:
+        st.info("ℹ️ Run a simulation to generate interactive charts.")
+    with tab2:
+        st.info("ℹ️ Run a simulation to generate interactive charts.")
+    with tab3:
+        st.info("ℹ️ Run a simulation to generate interactive charts.")
+    with tab4:
+        st.info("ℹ️ Run a simulation to generate interactive charts.")
 
 st.divider()
 
@@ -783,6 +962,21 @@ st.divider()
 # ============================================================================
 
 with st.sidebar:
+    # Dynamic simulation metadata
+    if results_data:
+        num_sims = results_data.get('num_simulations', 'N/A')
+        st.markdown("### Last Simulation")
+        st.markdown(
+            f"**{num_sims:,} iterations**" if isinstance(num_sims, int) else f"**{num_sims} iterations**"
+        )
+        probs_sidebar = results_data.get('probabilities', {}).get('champions', {})
+        if probs_sidebar:
+            st.markdown("**Top 5 by P(Champion):**")
+            top5 = sorted(probs_sidebar.items(), key=lambda x: x[1], reverse=True)[:5]
+            for rank, (team, prob) in enumerate(top5, 1):
+                st.markdown(f"{rank}. {team} — `{prob*100:.1f}%`")
+        st.divider()
+
     st.markdown("### How To Use")
     st.caption("Quick-start flow for simulation and interpretation.")
     st.markdown("""
