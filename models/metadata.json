@@ -17,7 +17,7 @@
   "test_season": "2023-2024",
   "train_samples": 413,
   "test_samples": 56,
-  "created_at": "2026-05-31T15:19:04.479667",
+  "created_at": "2026-06-02T11:05:59.889897",
   "features": [
     "Home_Elo_Pre",
     "Away_Elo_Pre",

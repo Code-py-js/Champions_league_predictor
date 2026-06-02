@@ -204,3 +204,31 @@ champions_league_predictor/
 - Feature engineering is built to prevent data leakage (pre-match Elo + rolling averages shifted by 1).
 - Simulation stage probabilities are derived from counters collected across Monte Carlo iterations and normalized by `num_simulations`.
 
+---
+
+## CI/CD Pipeline
+
+This project now includes a GitHub Actions workflow at:
+
+- `.github/workflows/ci-cd.yml`
+
+### What runs in CI (on push + pull request)
+
+1. Install dependencies with Python `3.11`
+2. Compile check Python files (`compileall`)
+3. Run tests with `pytest`
+4. Run a simulation smoke test (`num_simulations=5`)
+
+The CI job intentionally excludes integration tests that depend on external systems/network:
+
+- `tests/test_integration_api.py`
+- `tests/test_integration_extraction.py`
+
+### What runs in CD (on push to `main`)
+
+After CI passes, CD creates a release bundle and uploads it as a workflow artifact:
+
+- Includes: `app.py`, `requirements.txt`, `README.md`, `src/`, `data/`, `models/`, `results/`
+
+You can download the bundle from the GitHub Actions run summary.
+
